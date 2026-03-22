@@ -1,15 +1,11 @@
 package request
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 )
-
-type Request struct {
-	RequestLine RequestLine
-}
 
 type RequestLine struct {
 	HTTPVersion   string
@@ -17,25 +13,48 @@ type RequestLine struct {
 	Method        string
 }
 
+type Request struct {
+	RequestLine RequestLine
+}
+
+var (
+	ErrBadRequestLine = errors.New("bad requestline")
+	HTTPPrefix        = "HTTP/"
+	HTTPSeparator     = "\r\n"
+)
+
+func ParseRequestLine(reqLine string) (*RequestLine, error) {
+	sections := strings.Fields(reqLine)
+	if len(sections) != 3 {
+		return nil, ErrBadRequestLine
+	}
+
+	hasPrefix := strings.HasPrefix(sections[2], HTTPPrefix)
+	if !hasPrefix {
+		return nil, ErrBadRequestLine
+	}
+
+	return &RequestLine{
+		HTTPVersion:   strings.TrimPrefix(sections[2], HTTPPrefix),
+		RequestTarget: sections[1],
+		Method:        sections[0],
+	}, nil
+}
+
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	req, err := io.ReadAll(reader)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("could not read request: %w", err)
 	}
 
-	reqParts := strings.Split(string(req), "\r\n")
-	reqLine := reqParts[0]
-	reqLineParts := strings.Split(string(reqLine), " ")
-	if len(reqLineParts) != 3 {
-		return nil, fmt.Errorf("Request line does not have 3 sections")
+	reqParts := strings.Split(string(req), HTTPSeparator)
+	reqLine, err := ParseRequestLine(reqParts[0])
+	if err != nil {
+		return nil, fmt.Errorf("could not parse request: %w", err)
 	}
 
 	request := Request{
-		RequestLine{
-			HTTPVersion:   strings.TrimPrefix(reqLineParts[2], "HTTP/"),
-			RequestTarget: reqLineParts[1],
-			Method:        reqLineParts[0],
-		},
+		RequestLine: *reqLine,
 	}
 
 	return &request, nil
