@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strconv"
 
 	"github.com/amiraminb/HTTPfromTCP/internal/headers"
 )
@@ -19,6 +20,7 @@ type parserState string
 const (
 	StateInit    parserState = "init"
 	StateHeaders parserState = "headers"
+	StateBody    parserState = "body"
 	StateDone    parserState = "done"
 	StateError   parserState = "error"
 )
@@ -26,6 +28,7 @@ const (
 type Request struct {
 	RequestLine RequestLine
 	Headers     *headers.Headers
+	Body        string
 	state       parserState
 }
 
@@ -37,11 +40,30 @@ var (
 	Separator                 = []byte("\r\n")
 )
 
+func getInt(headers *headers.Headers, name string, defaultValue int) int {
+	valueStr, exists := headers.Get(name)
+	if !exists {
+		return defaultValue
+	}
+
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
 func newRequest() *Request {
 	return &Request{
 		state:   StateInit,
 		Headers: headers.NewHeaders(),
+		Body:    "",
 	}
+}
+
+func (r *Request) hasBody() bool {
+	length := getInt(r.Headers, "content-length", 0)
+	return length > 0
 }
 
 func (r *Request) parse(data []byte) (int, error) {
@@ -73,6 +95,7 @@ outer:
 
 			n, done, err := r.Headers.Parse(currentData)
 			if err != nil {
+				r.state = StateError
 				return 0, err
 			}
 
@@ -81,8 +104,28 @@ outer:
 			}
 
 			read += n
-
 			if done {
+				if r.hasBody() {
+					r.state = StateBody
+				} else {
+					r.state = StateDone
+				}
+			}
+
+		case StateBody:
+			length := getInt(r.Headers, "content-length", 0)
+			if length == 0 {
+				panic("chunked not implemented")
+			}
+			if len(currentData) == 0 {
+				break outer
+			}
+
+			remaining := min(length-len(r.Body), len(currentData))
+			r.Body += string(currentData[:remaining])
+			read += remaining
+
+			if len(r.Body) == length {
 				r.state = StateDone
 			}
 
@@ -103,7 +146,6 @@ func (r *Request) done() bool {
 func ParseRequestLine(b []byte) (*RequestLine, int, error) {
 	idx := bytes.Index(b, Separator)
 	if idx == -1 {
-		// TODO: better error handling here
 		return nil, 0, nil
 	}
 
@@ -132,12 +174,10 @@ func ParseRequestLine(b []byte) (*RequestLine, int, error) {
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	request := newRequest()
 
-	// NOTE: buffer could get overrun... a header or body over 1k can do that
 	buf := make([]byte, 1024)
 	bufLen := 0
 	for !request.done() {
 		n, err := reader.Read(buf[bufLen:])
-		// TODO: what to do here?
 		if err != nil {
 			return nil, err
 		}

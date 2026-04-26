@@ -15,7 +15,23 @@ type chunkReader struct {
 	pos             int
 }
 
-func TestRequestFromReader(t *testing.T) {
+// Read reads up to len(p) or numBytesPerRead bytes from the string per call
+// its useful for simulating reading a variable number of bytes per chunk from a network connection
+func (cr *chunkReader) Read(p []byte) (n int, err error) {
+	if cr.pos >= len(cr.data) {
+		return 0, io.EOF
+	}
+	endIndex := cr.pos + cr.numBytesPerRead
+	if endIndex > len(cr.data) {
+		endIndex = len(cr.data)
+	}
+	n = copy(p, cr.data[cr.pos:endIndex])
+	cr.pos += n
+
+	return n, nil
+}
+
+func TestRequestLineParse(t *testing.T) {
 	// Test: Good GET Request line
 	reader := &chunkReader{
 		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
@@ -53,9 +69,17 @@ func TestParseHeader(t *testing.T) {
 	r, err := RequestFromReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	assert.Equal(t, "localhost:42069", r.Headers.Get("host"))
-	assert.Equal(t, "curl/7.81.0", r.Headers.Get("user-agent"))
-	assert.Equal(t, "*/*", r.Headers.Get("accept"))
+	host, ok := r.Headers.Get("host")
+	assert.True(t, ok)
+	assert.Equal(t, "localhost:42069", host)
+
+	useragent, ok := r.Headers.Get("user-agent")
+	assert.True(t, ok)
+	assert.Equal(t, "curl/7.81.0", useragent)
+
+	accpet, ok := r.Headers.Get("accept")
+	assert.True(t, ok)
+	assert.Equal(t, "*/*", accpet)
 
 	// Test: Malformed Header
 	reader = &chunkReader{
@@ -66,18 +90,30 @@ func TestParseHeader(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Read reads up to len(p) or numBytesPerRead bytes from the string per call
-// its useful for simulating reading a variable number of bytes per chunk from a network connection
-func (cr *chunkReader) Read(p []byte) (n int, err error) {
-	if cr.pos >= len(cr.data) {
-		return 0, io.EOF
+func TestParseBody(t *testing.T) {
+	// Test: Standard Body
+	reader := &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 13\r\n" +
+			"\r\n" +
+			"hello world!\n",
+		numBytesPerRead: 3,
 	}
-	endIndex := cr.pos + cr.numBytesPerRead
-	if endIndex > len(cr.data) {
-		endIndex = len(cr.data)
-	}
-	n = copy(p, cr.data[cr.pos:endIndex])
-	cr.pos += n
+	r, err := RequestFromReader(reader)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, "hello world!\n", string(r.Body))
 
-	return n, nil
+	// Test: Body shorter than reported content length
+	reader = &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 20\r\n" +
+			"\r\n" +
+			"partial content",
+		numBytesPerRead: 3,
+	}
+	r, err = RequestFromReader(reader)
+	require.Error(t, err)
 }
