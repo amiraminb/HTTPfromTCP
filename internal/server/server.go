@@ -4,16 +4,35 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/amiraminb/HTTPfromTCP/internal/request"
+	"github.com/amiraminb/HTTPfromTCP/internal/response"
 )
 
+type HandlerError struct {
+	StatusCode response.StatusCode
+	Message    string
+}
+
+type Handler func(w *response.Writer, req *request.Request)
+
 type Server struct {
-	closed bool
+	closed  bool
+	handler Handler
 }
 
 func runConnection(s *Server, conn io.ReadWriteCloser) {
-	out := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello World!")
-	conn.Write(out)
-	conn.Close()
+	defer conn.Close()
+
+	responseWriter := response.NewWriter(conn)
+	r, err := request.RequestFromReader(conn)
+	if err != nil {
+		responseWriter.WriteStatusLine(response.StatusBadRequest)
+		responseWriter.WriteHeaders(*response.GetDefaultHeaders(0))
+		return
+	}
+
+	s.handler(responseWriter, r)
 }
 
 func runServer(s *Server, listener net.Listener) {
@@ -30,14 +49,15 @@ func runServer(s *Server, listener net.Listener) {
 	}
 }
 
-func Serve(port uint16) (*Server, error) {
+func Serve(port uint16, handler Handler) (*Server, error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
 	}
 
 	server := &Server{
-		closed: false,
+		closed:  false,
+		handler: handler,
 	}
 	go runServer(server, listener)
 

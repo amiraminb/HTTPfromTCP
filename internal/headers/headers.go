@@ -59,17 +59,12 @@ func (h *Headers) Get(name string) (string, bool) {
 	return str, ok
 }
 
-func (h *Headers) Set(name, value string) {
+func (h *Headers) Replace(name, value string) {
 	name = strings.ToLower(name)
-
-	if v, ok := h.headers[name]; ok {
-		h.headers[name] = fmt.Sprintf("%s,%s", v, value)
-	} else {
-		h.headers[name] = value
-	}
+	h.headers[name] = value
 }
 
-func (h *Headers) ForEeach(cb func(n, v string)) {
+func (h *Headers) ForEach(cb func(n, v string)) {
 	for n, v := range h.headers {
 		cb(n, v)
 	}
@@ -100,7 +95,7 @@ func (h *Headers) Parse(data []byte) (int, bool, error) {
 		}
 
 		read += idx + len(rn)
-		h.Set(name, value)
+		h.Replace(name, value)
 	}
 
 	return read, done, nil
